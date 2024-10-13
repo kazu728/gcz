@@ -7,7 +7,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
     ExecutableCommand,
 };
-use std::process::{Command, ExitStatus, Output};
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::{env, io};
 use std::{error::Error, fmt, io::Write, process};
 
@@ -82,12 +82,11 @@ fn gcz(stdout: &mut io::Stdout) -> Result<(), GczError> {
         .status()?;
 
     if status.success() {
-        println!("Commit successful: {}", message);
+        return Ok(());
     } else {
         println!("Commit failed");
+        return Ok(());
     }
-
-    Ok(())
 }
 
 fn is_inside_git_dir() -> Result<Output, GczError> {
@@ -100,6 +99,8 @@ fn is_inside_git_dir() -> Result<Output, GczError> {
 fn exist_stages_changes() -> Result<ExitStatus, GczError> {
     Command::new("git")
         .args(&["diff", "--cached", "--exit-code"])
+        .stdout(Stdio::null()) // just check the status
+        .stderr(Stdio::null())
         .status()
         .map_err(GczError::from)
 }
