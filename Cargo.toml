@@ -1,7 +1,18 @@
 [package]
 name = "gcz"
 version = "0.1.0"
+authors = ["Kazuki Matsuo <kazuki.matsuo.728@gmail.com>"]
+description = "Simple git commit message generator"
+license = "MIT"
+repository = "https://github.com/kazu728/gcz"
 edition = "2021"
+include = [
+  "src/**/*.rs",
+  "Cargo.toml",
+  "README.md",
+  "LICENSE",  
+]
+readme = "README.md"
 
 [dependencies]
 clap = { version = "4.5.17", features = ["cargo"] }
