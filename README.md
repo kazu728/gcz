@@ -1,6 +1,8 @@
 # gcz
 
+![Crates.io](https://img.shields.io/crates/v/gcz)
 [![test](https://github.com/kazu728/gcz/actions/workflows/test.yml/badge.svg)](https://github.com/kazu728/gcz/actions/workflows/test.yml)
+![License](https://img.shields.io/crates/l/gcz)
 
 **gcz** is a command-line tool that simplifies Git commit processes by providing an interactive interface for selecting commit types and composing commit messages following the conventional commits standard.
 
@@ -13,30 +15,17 @@
 
 ## Installation
 
-<!-- TODO: after publishing -->
+### Homebrew
 
-<!-- ### Build from Source
+```bash
+brew install kazu728/tap/gcz
+```
 
-1. **Clone the Repository**
+### Cargo
 
-   ```bash
-   git clone https://github.com/yourusername/gcz.git
-   cd gcz
-   ```
-
-2. **Build the Project**
-
-   ```bash
-   cargo build --release
-   ```
-
-3. **Add to PATH**
-
-   Move the executable to a directory in your `PATH`. For example:
-
-   ```bash
-   sudo mv target/release/gcz /usr/local/bin/
-   ``` -->
+```bash
+cargo install gcz
+```
 
 ## Usage
 
