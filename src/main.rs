@@ -10,6 +10,8 @@ use crossterm::{
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::{env, io};
 use std::{error::Error, fmt, io::Write, process};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub const COMMIT_TYPES: &'static [&str] = &[
     "feat", "fix", "docs", "style", "refactor", "perf", "test", "ci", "chore",
@@ -224,18 +226,21 @@ fn finalize(input: String, stdout: &mut io::Stdout) -> Result<String, GczError> 
 
 fn input_commit_message(stdout: &mut io::Stdout, commit_type: &str) -> Result<String, GczError> {
     let mut message = format!("{}: ", commit_type);
-    let mut cursor_pos = message.len();
+    let mut cursor_pos = message.graphemes(true).count();
 
     enable_raw_mode()?;
     loop {
+        let cursor_display_width =
+            UnicodeWidthStr::width(&message[..cursor_byte_index(&message, cursor_pos)]);
+
         execute!(
             stdout,
             Clear(ClearType::CurrentLine),
             cursor::MoveToColumn(0),
             Print(&message),
-            cursor::MoveToColumn(cursor_pos as u16)
-        )
-        .and_then(|_| stdout.flush())?;
+            cursor::MoveToColumn(cursor_display_width as u16)
+        )?;
+        stdout.flush()?;
 
         if let Event::Key(key_event) = event::read()? {
             match (key_event.code, key_event.modifiers) {
@@ -250,24 +255,47 @@ fn input_commit_message(stdout: &mut io::Stdout, commit_type: &str) -> Result<St
                     return Ok(message);
                 }
                 (KeyCode::Char(c), _) => {
-                    message.insert(cursor_pos, c);
+                    let mut graphemes: Vec<&str> = message.graphemes(true).collect();
+                    let character = c.to_string();
+                    graphemes.insert(cursor_pos, &character);
+                    message = graphemes.concat();
                     cursor_pos += 1;
                 }
                 (KeyCode::Backspace, _) if cursor_pos > 0 => {
-                    message.remove(cursor_pos - 1);
+                    let mut graphemes: Vec<&str> = message.graphemes(true).collect();
+                    cursor_pos -= 1;
+                    graphemes.remove(cursor_pos);
+                    message = graphemes.concat();
+                }
+                (KeyCode::Delete, _) => {
+                    let mut graphemes: Vec<&str> = message.graphemes(true).collect();
+                    if cursor_pos < graphemes.len() {
+                        graphemes.remove(cursor_pos);
+                        message = graphemes.concat();
+                    }
+                }
+                (KeyCode::Left, _) if cursor_pos > 0 => {
                     cursor_pos -= 1;
                 }
-                (KeyCode::Delete, _) if cursor_pos < message.len() => {
-                    message.remove(cursor_pos);
+                (KeyCode::Right, _) => {
+                    let graphemes_count = message.graphemes(true).count();
+                    if cursor_pos < graphemes_count {
+                        cursor_pos += 1;
+                    }
                 }
-                (KeyCode::Left, _) if cursor_pos > 0 => cursor_pos -= 1,
-                (KeyCode::Right, _) if cursor_pos < message.len() => cursor_pos += 1,
                 (KeyCode::Home, _) => cursor_pos = 0,
-                (KeyCode::End, _) => cursor_pos = message.len(),
+                (KeyCode::End, _) => cursor_pos = message.graphemes(true).count(),
                 _ => continue,
             }
         }
     }
+}
+
+fn cursor_byte_index(s: &str, cursor_pos: usize) -> usize {
+    s.grapheme_indices(true)
+        .nth(cursor_pos)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| s.len())
 }
 
 #[cfg(test)]
