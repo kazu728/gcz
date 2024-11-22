@@ -1,6 +1,6 @@
 [package]
 name = "gcz"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Kazuki Matsuo <kazuki.matsuo.728@gmail.com>"]
 description = "Simple git commit message generator"
 license = "MIT"
