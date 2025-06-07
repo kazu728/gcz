@@ -10,6 +10,7 @@ use crossterm::{
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::{env, io};
 use std::{error::Error, fmt, io::Write, process};
+use tempfile::NamedTempFile;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -45,13 +46,25 @@ fn graceful_shutdown(stdout: &mut io::Stdout) -> io::Result<()> {
 }
 
 fn main() {
-    let _ = command!()
+    let matches = command!()
+        .about("Simple git commit message generator with editor support")
+        .after_help(
+            "EDITOR CONFIGURATION:\n    \
+            The default editor is determined by the $EDITOR environment variable.\n    \
+            If not set, 'vim' will be used as the default.\n\n    \
+            To use a different editor:\n      \
+            - Set EDITOR environment variable: export EDITOR=vim\n      \
+            - Or run with: EDITOR=vim gcz\n\n    \
+            Use --inline flag to use the built-in inline editor instead.",
+        )
         .arg(arg!(-e --emoji "WIP: add emoji to commit template").required(false))
+        .arg(arg!(-i --inline "Use inline editor instead of external editor").required(false))
         .get_matches();
 
     let stdout = &mut io::stdout();
+    let use_inline = matches.get_flag("inline");
 
-    match gcz(stdout) {
+    match gcz(stdout, use_inline) {
         Ok(_) => {}
         Err(GczError::UserInterrupt) => {
             graceful_shutdown(stdout).expect("Failed to shutdown");
@@ -65,7 +78,7 @@ fn main() {
     }
 }
 
-fn gcz(stdout: &mut io::Stdout) -> Result<(), GczError> {
+fn gcz(stdout: &mut io::Stdout, use_inline: bool) -> Result<(), GczError> {
     if !is_inside_git_dir()?.stdout.starts_with(b"true") {
         println!("Not a git repository");
         return Ok(());
@@ -77,7 +90,7 @@ fn gcz(stdout: &mut io::Stdout) -> Result<(), GczError> {
     }
 
     let selected_type = select_commit_type(stdout)?;
-    let message = input_commit_message(stdout, &selected_type)?;
+    let message = input_commit_message(stdout, &selected_type, use_inline)?;
 
     let status = Command::new("git")
         .args(&["commit", "-m", &message])
@@ -224,7 +237,53 @@ fn finalize(input: String, stdout: &mut io::Stdout) -> Result<String, GczError> 
     Ok(input)
 }
 
-fn input_commit_message(stdout: &mut io::Stdout, commit_type: &str) -> Result<String, GczError> {
+fn get_editor() -> String {
+    env::var("EDITOR").unwrap_or_else(|_| "vim".to_string())
+}
+
+fn edit_with_external_editor(initial_content: &str) -> Result<String, GczError> {
+    let mut temp_file = NamedTempFile::new()?;
+    temp_file.write_all(initial_content.as_bytes())?;
+    temp_file.flush()?;
+
+    let editor = get_editor();
+    let status = Command::new(&editor)
+        .arg(temp_file.path())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        return Err(GczError::UserInterrupt);
+    }
+
+    let content = std::fs::read_to_string(temp_file.path())?;
+    let message = content
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+
+    if message.is_empty() {
+        Err(GczError::UserInterrupt)
+    } else {
+        Ok(message)
+    }
+}
+
+fn input_commit_message(
+    stdout: &mut io::Stdout,
+    commit_type: &str,
+    use_inline: bool,
+) -> Result<String, GczError> {
+    if !use_inline {
+        let initial_content = format!("{}: \n\n# Please enter the commit message for your changes.\n# Lines starting with '#' will be ignored, and an empty message aborts the commit.", commit_type);
+        return edit_with_external_editor(&initial_content);
+    }
+
     let mut message = format!("{}: ", commit_type);
     let mut cursor_pos = message.graphemes(true).count();
 
