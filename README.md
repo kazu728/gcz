@@ -37,7 +37,8 @@ gcz
 
 ### Command-line Options
 
-- `-e`, `--emoji`: _(Work in Progress)_ Add emojis to the commit template.
+- `-e`, `--emoji`: Add emojis to the commit type (e.g., `✨ feat: Add new feature`)
+- `-i`, `--inline`: Use inline editor instead of external editor
 
 ## Testing
 

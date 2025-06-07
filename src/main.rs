@@ -14,8 +14,22 @@ use tempfile::NamedTempFile;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-pub const COMMIT_TYPES: &'static [&str] = &[
-    "feat", "fix", "docs", "style", "refactor", "perf", "test", "ci", "chore",
+#[derive(Debug, PartialEq)]
+pub struct CommitType {
+    name: &'static str,
+    emoji: &'static str,
+}
+
+pub const COMMIT_TYPES: &[CommitType] = &[
+    CommitType { name: "feat", emoji: "✨" },
+    CommitType { name: "fix", emoji: "🐛" },
+    CommitType { name: "docs", emoji: "📚" },
+    CommitType { name: "style", emoji: "💎" },
+    CommitType { name: "refactor", emoji: "♻️" },
+    CommitType { name: "perf", emoji: "⚡" },
+    CommitType { name: "test", emoji: "🧪" },
+    CommitType { name: "ci", emoji: "👷" },
+    CommitType { name: "chore", emoji: "🔧" },
 ];
 
 #[derive(Debug)]
@@ -57,14 +71,15 @@ fn main() {
             - Or run with: EDITOR=vim gcz\n\n    \
             Use --inline flag to use the built-in inline editor instead.",
         )
-        .arg(arg!(-e --emoji "WIP: add emoji to commit template").required(false))
+        .arg(arg!(-e --emoji "Add emoji to commit type").required(false))
         .arg(arg!(-i --inline "Use inline editor instead of external editor").required(false))
         .get_matches();
 
     let stdout = &mut io::stdout();
     let use_inline = matches.get_flag("inline");
+    let use_emoji = matches.get_flag("emoji");
 
-    match gcz(stdout, use_inline) {
+    match gcz(stdout, use_inline, use_emoji) {
         Ok(_) => {}
         Err(GczError::UserInterrupt) => {
             graceful_shutdown(stdout).expect("Failed to shutdown");
@@ -78,7 +93,7 @@ fn main() {
     }
 }
 
-fn gcz(stdout: &mut io::Stdout, use_inline: bool) -> Result<(), GczError> {
+fn gcz(stdout: &mut io::Stdout, use_inline: bool, use_emoji: bool) -> Result<(), GczError> {
     if !is_inside_git_dir()?.stdout.starts_with(b"true") {
         println!("Not a git repository");
         return Ok(());
@@ -89,19 +104,17 @@ fn gcz(stdout: &mut io::Stdout, use_inline: bool) -> Result<(), GczError> {
         return Ok(());
     }
 
-    let selected_type = select_commit_type(stdout)?;
-    let message = input_commit_message(stdout, &selected_type, use_inline)?;
+    let selected_type = select_commit_type(stdout, use_emoji)?;
+    let message = input_commit_message(stdout, &selected_type, use_inline, use_emoji)?;
 
     let status = Command::new("git")
         .args(&["commit", "-m", &message])
         .status()?;
 
-    if status.success() {
-        return Ok(());
-    } else {
+    if !status.success() {
         println!("Commit failed");
-        return Ok(());
     }
+    Ok(())
 }
 
 fn is_inside_git_dir() -> Result<Output, GczError> {
@@ -120,15 +133,15 @@ fn exist_stages_changes() -> Result<ExitStatus, GczError> {
         .map_err(GczError::from)
 }
 
-fn select_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
+fn select_commit_type(stdout: &mut io::Stdout, use_emoji: bool) -> Result<String, GczError> {
     enable_raw_mode()
         .map_err(GczError::from)
         .and_then(|_| execute!(stdout, cursor::Hide, Clear(ClearType::All)).map_err(GczError::from))
-        .and_then(|_| handle_commit_type(stdout))
+        .and_then(|_| handle_commit_type(stdout, use_emoji))
         .and_then(|input| finalize(input, stdout))
 }
 
-fn handle_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
+fn handle_commit_type(stdout: &mut io::Stdout, use_emoji: bool) -> Result<String, GczError> {
     let mut selected_index = 0;
     let mut input = String::new();
     let mut is_selected = false;
@@ -156,21 +169,27 @@ fn handle_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
             cursor::MoveToNextLine(1)
         )?;
 
-        let filtered_types: Vec<(usize, &'static str)> = filter_type_by_input(&input);
+        let filtered_types: Vec<(usize, &CommitType)> = filter_type_by_input(&input);
 
-        for (i, &(_, commit_type)) in filtered_types.iter().enumerate() {
+        for (i, (_, commit_type)) in filtered_types.iter().enumerate() {
+            let display_type = if use_emoji {
+                format!("{} {}", commit_type.emoji, commit_type.name)
+            } else {
+                commit_type.name.to_string()
+            };
+            
             if i == selected_index {
                 execute!(
                     stdout,
                     SetForegroundColor(Color::Green),
-                    Print(format!("❯ {}", commit_type)),
+                    Print(format!("❯ {}", display_type)),
                     SetForegroundColor(Color::Reset),
                     cursor::MoveToNextLine(1),
                 )?;
             } else {
                 execute!(
                     stdout,
-                    Print(format!("  {}", commit_type)),
+                    Print(format!("  {}", display_type)),
                     cursor::MoveToNextLine(1)
                 )?;
             }
@@ -179,8 +198,7 @@ fn handle_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
 
         if let Event::Key(key_event) = event::read()? {
             match (key_event.code, key_event.modifiers) {
-                (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                _ if check_interrupt(&key_event) => {
                     return Err(GczError::UserInterrupt);
                 }
                 (KeyCode::Up, _) => {
@@ -200,7 +218,7 @@ fn handle_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
 
                 (KeyCode::Enter, _) => {
                     if !filtered_types.is_empty() {
-                        input = filtered_types[selected_index].1.to_string();
+                        input = filtered_types[selected_index].1.name.to_string();
                         is_selected = true;
                     }
                 }
@@ -222,19 +240,34 @@ fn handle_commit_type(stdout: &mut io::Stdout) -> Result<String, GczError> {
     }
 }
 
-fn filter_type_by_input(input: &str) -> Vec<(usize, &'static str)> {
+fn filter_type_by_input(input: &str) -> Vec<(usize, &CommitType)> {
     COMMIT_TYPES
         .iter()
         .enumerate()
-        .filter(|(_, &t)| t.to_lowercase().contains(&input.to_lowercase()))
-        .map(|(i, &t)| (i, t))
+        .filter(|(_, t)| t.name.to_lowercase().contains(&input.to_lowercase()))
+        .map(|(i, t)| (i, t))
         .collect()
+}
+
+fn format_commit_type_with_emoji(commit_type: &str) -> String {
+    COMMIT_TYPES
+        .iter()
+        .find(|ct| ct.name == commit_type)
+        .map(|ct| format!("{} {}", ct.emoji, ct.name))
+        .unwrap_or_else(|| commit_type.to_string())
 }
 
 fn finalize(input: String, stdout: &mut io::Stdout) -> Result<String, GczError> {
     disable_raw_mode()?;
     execute!(stdout, cursor::Show, cursor::MoveToNextLine(1))?;
     Ok(input)
+}
+
+fn check_interrupt(key_event: &event::KeyEvent) -> bool {
+    matches!(
+        (key_event.code, key_event.modifiers),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('d'), KeyModifiers::CONTROL)
+    )
 }
 
 fn get_editor() -> String {
@@ -278,13 +311,20 @@ fn input_commit_message(
     stdout: &mut io::Stdout,
     commit_type: &str,
     use_inline: bool,
+    use_emoji: bool,
 ) -> Result<String, GczError> {
+    let formatted_type = if use_emoji {
+        format_commit_type_with_emoji(commit_type)
+    } else {
+        commit_type.to_string()
+    };
+
     if !use_inline {
-        let initial_content = format!("{}: \n\n# Please enter the commit message for your changes.\n# Lines starting with '#' will be ignored, and an empty message aborts the commit.", commit_type);
+        let initial_content = format!("{}: \n\n# Please enter the commit message for your changes.\n# Lines starting with '#' will be ignored, and an empty message aborts the commit.", formatted_type);
         return edit_with_external_editor(&initial_content);
     }
 
-    let mut message = format!("{}: ", commit_type);
+    let mut message = format!("{}: ", formatted_type);
     let mut cursor_pos = message.graphemes(true).count();
 
     enable_raw_mode()?;
@@ -303,8 +343,7 @@ fn input_commit_message(
 
         if let Event::Key(key_event) = event::read()? {
             match (key_event.code, key_event.modifiers) {
-                (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                _ if check_interrupt(&key_event) => {
                     disable_raw_mode()?;
                     return Err(GczError::UserInterrupt);
                 }
@@ -365,10 +404,13 @@ mod tests {
     fn should_filter() {
         let input = "f";
         let result = filter_type_by_input(input);
-        assert_eq!(
-            result,
-            vec![(0, "feat"), (1, "fix"), (4, "refactor"), (5, "perf")]
-        );
+        let expected: Vec<(usize, &CommitType)> = vec![
+            (0, &COMMIT_TYPES[0]), // feat
+            (1, &COMMIT_TYPES[1]), // fix
+            (4, &COMMIT_TYPES[4]), // refactor
+            (5, &COMMIT_TYPES[5]), // perf
+        ];
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -378,5 +420,23 @@ mod tests {
         let result = finalize(input.to_string(), &mut stdout).unwrap();
 
         assert_eq!(result, "feat");
+    }
+
+    #[test]
+    fn should_format_commit_type_with_emoji() {
+        assert_eq!(format_commit_type_with_emoji("feat"), "✨ feat");
+        assert_eq!(format_commit_type_with_emoji("fix"), "🐛 fix");
+        assert_eq!(format_commit_type_with_emoji("docs"), "📚 docs");
+        assert_eq!(format_commit_type_with_emoji("style"), "💎 style");
+        assert_eq!(format_commit_type_with_emoji("refactor"), "♻️ refactor");
+        assert_eq!(format_commit_type_with_emoji("perf"), "⚡ perf");
+        assert_eq!(format_commit_type_with_emoji("test"), "🧪 test");
+        assert_eq!(format_commit_type_with_emoji("ci"), "👷 ci");
+        assert_eq!(format_commit_type_with_emoji("chore"), "🔧 chore");
+    }
+
+    #[test]
+    fn should_return_original_for_unknown_commit_type() {
+        assert_eq!(format_commit_type_with_emoji("unknown"), "unknown");
     }
 }
